@@ -27,7 +27,7 @@ optional arguments:
 ```
 
 ## Refererences ##
-MAF: https://arxiv.org/abs/1705.07057
-SurVAE Flows: https://arxiv.org/abs/2007.02731
-Argmax Flows: https://arxiv.org/abs/2102.05379
+MAF: https://arxiv.org/abs/1705.07057 \
+SurVAE Flows: https://arxiv.org/abs/2007.02731 \
+Argmax Flows: https://arxiv.org/abs/2102.05379 \
 Densely Connected NF: https://arxiv.org/abs/2106.04627
