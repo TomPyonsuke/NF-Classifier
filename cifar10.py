@@ -41,7 +41,7 @@ class ConditonalNN(nn.Module):
 
 
 class Cifar10Trainer(pl.LightningModule):
-    def __init__(self, n_blocks, learning_rate=1e-3, weight_decay=1e-4, augment_noise=False):
+    def __init__(self, n_blocks, learning_rate=1e-3, weight_decay=1e-4, noise_growth_rate=0):
         super().__init__()
         self.n_blocks = n_blocks
         self.n_classes = 10
@@ -62,7 +62,7 @@ class Cifar10Trainer(pl.LightningModule):
             n_blocks=self.n_blocks,
             n_hidden=100,
             cond_nn_factory=ConditonalNN,
-            augment_noise=augment_noise,
+            noise_growth_rate=noise_growth_rate,
             reject_sampling=False
         )
 
@@ -118,13 +118,13 @@ class Cifar10Trainer(pl.LightningModule):
         return optimizer
 
 
-def train_cifar10(n_epochs, n_blocks, learning_rate, weight_decay, augment_noise):
+def train_cifar10(n_epochs, n_blocks, learning_rate, weight_decay, noise_growth_rate):
     bar = ProgressBar()
     ncp_cf = Cifar10Trainer(
         n_blocks=n_blocks,
         learning_rate=learning_rate,
         weight_decay=weight_decay,
-        augment_noise=augment_noise
+        noise_growth_rate=noise_growth_rate
     )
     trainer = pl.Trainer(
         max_epochs=n_epochs,

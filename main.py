@@ -8,7 +8,7 @@ def main(args):
             n_blocks=args.num_blocks,
             learning_rate=args.learning_rate,
             weight_decay=args.weight_decay,
-            augment_noise=args.augment_noise
+            noise_growth_rate=args.noise_growth_rate
         )
 
 if __name__ == '__main__':
@@ -33,9 +33,10 @@ if __name__ == '__main__':
                         type=float,
                         default=1e-4,
                         help='Weight decay for the trainer.')
-    parser.add_argument('--augment_noise',
-                        action='store_true',
-                        help='Whether to enable inverse multi-scale.')
+    parser.add_argument('--noise_growth_rate',
+                        type=int,
+                        default=0,
+                        help='Growth rate for augmented noise. If 0, no noise is augmented.')
 
 
     args = parser.parse_args()

@@ -6,14 +6,14 @@ import torch.distributions as dist
 import math
 
 class FlowBlock(nn.Module):
-    def __init__(self, input_dim, n_hidden, cond_nn_factory=None, augment_noise=False):
+    def __init__(self, input_dim, n_hidden, cond_nn_factory=None, noise_growth_rate=0):
         super().__init__()
         self.input_dim = input_dim
         self.n_hidden = n_hidden
-        self.augment_noise = augment_noise
+        self.noise_growth_rate = noise_growth_rate
         self.cond_nn = cond_nn_factory(self.n_hidden)
-        if augment_noise:
-            self.noise_cond_nn = cond_nn_factory(input_dim)
+        if noise_growth_rate:
+            self.noise_cond_nn = cond_nn_factory(noise_growth_rate*2)
         self.flow_modules = nn.ModuleList([
             maf.MADE(self.input_dim, num_hidden=self.n_hidden, act='relu'),
             maf.BatchNormFlow(self.input_dim),
@@ -24,34 +24,41 @@ class FlowBlock(nn.Module):
         if cond_inputs is not None:
             assert self.cond_nn is not None, 'Conditional NN not defined for conditional inputs!'
 
-        if self.augment_noise:
-            noise_dist = dist.normal.Normal(torch.zeros_like(inputs), torch.ones_like(inputs))
+        if self.noise_growth_rate:
+            noise_dist = dist.normal.Normal(
+                torch.zeros(inputs.shape[0], self.noise_growth_rate).cuda(),
+                torch.ones(inputs.shape[0], self.noise_growth_rate).cuda(),
+            )
             noise = noise_dist.sample()
             log_prob = noise_dist.log_prob(noise).sum(dim=1, keepdim=True)
-            noise_cond_nn_out = self.noise_cond_nn(cond_inputs).view(-1, 2, self.input_dim//2)
-            mean, log_std = noise_cond_nn_out.permute(1, 0, 2)
+            # noise_cond_nn_out = self.noise_cond_nn(cond_inputs).view(-1, 2, self.input_dim//2)
+            # mean, log_std = noise_cond_nn_out.permute(1, 0, 2)
+            mean, log_std = self.noise_cond_nn(cond_inputs).chunk(2, dim=1)
+            log_std = 2. * torch.tanh(log_std / 2.)
             noise = (noise + mean) * torch.exp(log_std)
-            inputs = torch.cat((inputs, noise), dim=1)
+            #inputs = torch.cat((inputs, noise), dim=1)
+            inputs = torch.cat((noise, inputs), dim=1)
             logp_z_e = (log_prob + log_std).sum(-1, keepdim=True)
 
         logdets = 0.0
         outputs = inputs
         for f in self.flow_modules:
-            #outputs, logdets_ = f(outputs, self.cond_nn(cond_inputs))
-            outputs, logdets_ = f(outputs)
+            outputs, logdets_ = f(outputs, self.cond_nn(cond_inputs))
+            #outputs, logdets_ = f(outputs)
             logdets += logdets_
 
-        if self.augment_noise:
+        if self.noise_growth_rate:
             logdets = logp_z_e - logdets
         return outputs, logdets
 
     def reverse(self, inputs, cond_inputs=None):
         if self.augment_noise:
-            inputs = inputs[:, :inputs.shape[-1]/2]
+            #inputs = inputs[:, :-self.noise_growth_rate]
+            inputs = inputs[:, self.noise_growth_rate:]
         outputs = inputs
         for f in reversed(self.flow_modules):
-            #outputs = f.reverse(outputs, self.cond_nn(cond_inputs))
-            outputs = f.reverse(outputs)
+            outputs = f.reverse(outputs, self.cond_nn(cond_inputs))
+            #outputs = f.reverse(outputs)
         return outputs
 
 class Flow(nn.Module):
@@ -59,7 +66,7 @@ class Flow(nn.Module):
     In addition to a forward pass it implements a backward pass and
     computes log jacobians.
     """
-    def __init__(self, n_classes, n_blocks, n_hidden, cond_nn_factory=None, augment_noise=False, reject_sampling=False):
+    def __init__(self, n_classes, n_blocks, n_hidden, cond_nn_factory=None, noise_growth_rate=0, reject_sampling=False):
         super().__init__()
         self.n_classes = n_classes
         self.n_blocks = n_blocks
@@ -68,11 +75,11 @@ class Flow(nn.Module):
         self.flow_blocks = nn.ModuleList()
         self.flow_blocks.append(argmax.ArgmaxLayer(self.n_classes))
         input_dim = self.n_classes
-        self.flow_blocks.append(FlowBlock(input_dim, self.n_hidden, self.cond_nn_factory, False))
+        self.flow_blocks.append(FlowBlock(input_dim, self.n_hidden, self.cond_nn_factory, 0))
         for _ in range(self.n_blocks - 1):
-            if augment_noise:
-                input_dim *= 2
-            self.flow_blocks.append(FlowBlock(input_dim, self.n_hidden, self.cond_nn_factory, augment_noise))
+            if noise_growth_rate:
+                input_dim += noise_growth_rate
+            self.flow_blocks.append(FlowBlock(input_dim, self.n_hidden, self.cond_nn_factory, noise_growth_rate))
 
     def forward(self, inputs, cond_inputs=None):
         """ Performs a forward or backward pass for flow modules.

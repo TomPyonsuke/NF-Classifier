@@ -15,8 +15,9 @@ class ArgmaxLayer(nn.Module):
         return T - nn.Softplus()(T - inputs)
 
     def sample_with_log_prob(self, inputs):
-        cond_out = self.cond_nn(inputs).view(-1, 2, self.dim)
-        mean, log_var = cond_out.permute(1, 0, 2)
+        # cond_out = self.cond_nn(inputs).view(-1, 2, self.dim)
+        # mean, log_var = cond_out.permute(1, 0, 2)
+        mean, log_var = self.cond_nn(inputs).chunk(2, dim=1)
         noise_dist = torch.distributions.normal.Normal(
             torch.zeros(inputs.shape),
             torch.ones(inputs.shape)
