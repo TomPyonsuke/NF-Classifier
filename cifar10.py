@@ -41,9 +41,12 @@ class ConditonalNN(nn.Module):
 
 
 class Cifar10Trainer(pl.LightningModule):
-    def __init__(self, n_blocks, learning_rate=1e-3, weight_decay=1e-4, noise_growth_rate=0):
+    def __init__(self, n_blocks, train_batch_size, val_batch_size, learning_rate=1e-3,
+                 weight_decay=1e-4, noise_growth_rate=0):
         super().__init__()
         self.n_blocks = n_blocks
+        self.train_batch_size = train_batch_size
+        self.val_batch_size = val_batch_size
         self.n_classes = 10
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
@@ -78,7 +81,7 @@ class Cifar10Trainer(pl.LightningModule):
         return loss
 
     def reverse(self, x, y):
-        y_, _ = self.flows.sample_with_log_prob(sample_shape=y.shape, cond_inputs=x)
+        y_, _ = self.flows.sample_with_log_prob(n_samples=y.shape[0], cond_inputs=x)
         return y_
 
     def training_step(self, batch, batch_idx):
@@ -100,12 +103,12 @@ class Cifar10Trainer(pl.LightningModule):
 
     def train_dataloader(self):
         dataset = CIFAR10(train=True, download=False, root=self.dataset_root, transform=self.transform)
-        dataloader = torch.utils.data.DataLoader(dataset, batch_size=64, num_workers=4)
+        dataloader = torch.utils.data.DataLoader(dataset, batch_size=self.train_batch_size, num_workers=4)
         return dataloader
 
     def val_dataloader(self):
         dataset = CIFAR10(train=False, download=False, root=self.dataset_root, transform=self.transform)
-        dataloader = torch.utils.data.DataLoader(dataset, batch_size=128, num_workers=4)
+        dataloader = torch.utils.data.DataLoader(dataset, batch_size=self.val_batch_size, num_workers=4)
         return dataloader
 
     def test_dataloader(self):
@@ -118,9 +121,11 @@ class Cifar10Trainer(pl.LightningModule):
         return optimizer
 
 
-def train_cifar10(n_epochs, n_blocks, learning_rate, weight_decay, noise_growth_rate):
+def train_cifar10(n_epochs, n_blocks, train_batch_size, val_batch_size, learning_rate, weight_decay, noise_growth_rate):
     bar = ProgressBar()
     ncp_cf = Cifar10Trainer(
+        train_batch_size=train_batch_size,
+        val_batch_size=val_batch_size,
         n_blocks=n_blocks,
         learning_rate=learning_rate,
         weight_decay=weight_decay,
@@ -132,7 +137,7 @@ def train_cifar10(n_epochs, n_blocks, learning_rate, weight_decay, noise_growth_
         # limit_val_batches=5,
         # limit_test_batches=1,
         gpus=1,
-        num_sanity_val_steps=0,
+        num_sanity_val_steps=2,
         check_val_every_n_epoch=1,
         callbacks=[bar]
     )

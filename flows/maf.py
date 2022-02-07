@@ -40,8 +40,7 @@ class MaskedLinear(nn.Module):
         self.register_buffer('mask', mask)
 
     def forward(self, inputs, cond_inputs=None):
-        output = F.linear(inputs, self.linear.weight * self.mask,
-                          self.linear.bias)
+        output = F.linear(inputs, self.linear.weight * self.mask, self.linear.bias)
         if cond_inputs is not None:
             output += cond_inputs
         return output

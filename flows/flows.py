@@ -5,39 +5,45 @@ import torch.nn as nn
 import torch.distributions as dist
 import math
 
+
 class FlowBlock(nn.Module):
-    def __init__(self, input_dim, n_hidden, cond_nn_factory=None, noise_growth_rate=0):
+    def __init__(self, input_dim, n_hidden, cond_nn_factory=None, noise_condn_nn_in_dim=0, aug_noise_dim=0):
         super().__init__()
         self.input_dim = input_dim
         self.n_hidden = n_hidden
-        self.noise_growth_rate = noise_growth_rate
+        self.noise_cond_nn_in_dim = noise_condn_nn_in_dim
+        self.aug_noise_dim = aug_noise_dim
         self.cond_nn = cond_nn_factory(self.n_hidden)
-        if noise_growth_rate:
-            self.noise_cond_nn = cond_nn_factory(noise_growth_rate*2)
+        if noise_condn_nn_in_dim:
+            self.noise_cond_nn = nn.Sequential(
+                nn.Linear(noise_condn_nn_in_dim, 100),
+                nn.ReLU(),
+                nn.Linear(100, 2*aug_noise_dim)
+            )
         self.flow_modules = nn.ModuleList([
             maf.MADE(self.input_dim, num_hidden=self.n_hidden, act='relu'),
             maf.BatchNormFlow(self.input_dim),
             maf.Reverse(self.input_dim)
         ])
 
-    def forward(self, inputs, cond_inputs=None):
+    def forward(self, inputs, cond_inputs=None, prev_inputs=None):
         if cond_inputs is not None:
             assert self.cond_nn is not None, 'Conditional NN not defined for conditional inputs!'
 
-        if self.noise_growth_rate:
+        if self.noise_cond_nn_in_dim:
             noise_dist = dist.normal.Normal(
-                torch.zeros(inputs.shape[0], self.noise_growth_rate).cuda(),
-                torch.ones(inputs.shape[0], self.noise_growth_rate).cuda(),
+                torch.zeros(inputs.shape[0], self.aug_noise_dim).cuda(),
+                torch.ones(inputs.shape[0], self.aug_noise_dim).cuda(),
             )
             noise = noise_dist.sample()
             log_prob = noise_dist.log_prob(noise).sum(dim=1, keepdim=True)
             # noise_cond_nn_out = self.noise_cond_nn(cond_inputs).view(-1, 2, self.input_dim//2)
             # mean, log_std = noise_cond_nn_out.permute(1, 0, 2)
-            mean, log_std = self.noise_cond_nn(cond_inputs).chunk(2, dim=1)
+            noise_cond_nn_input = torch.cat(prev_inputs, dim=1)
+            mean, log_std = self.noise_cond_nn(noise_cond_nn_input).chunk(2, dim=1)
             log_std = 2. * torch.tanh(log_std / 2.)
             noise = (noise + mean) * torch.exp(log_std)
-            #inputs = torch.cat((inputs, noise), dim=1)
-            inputs = torch.cat((noise, inputs), dim=1)
+            inputs = torch.cat((inputs, noise), dim=1)
             logp_z_e = (log_prob + log_std).sum(-1, keepdim=True)
 
         logdets = 0.0
@@ -47,19 +53,31 @@ class FlowBlock(nn.Module):
             #outputs, logdets_ = f(outputs)
             logdets += logdets_
 
-        if self.noise_growth_rate:
+        if self.noise_cond_nn_in_dim:
             logdets = logp_z_e - logdets
         return outputs, logdets
 
     def reverse(self, inputs, cond_inputs=None):
-        if self.augment_noise:
-            #inputs = inputs[:, :-self.noise_growth_rate]
-            inputs = inputs[:, self.noise_growth_rate:]
         outputs = inputs
         for f in reversed(self.flow_modules):
             outputs = f.reverse(outputs, self.cond_nn(cond_inputs))
             #outputs = f.reverse(outputs)
+        if self.noise_cond_nn_in_dim:
+            outputs = outputs[:, :-self.aug_noise_dim]
         return outputs
+
+
+def _get_noise_condn_nn_in_dims(n_blocks, input_dim, growth_rate):
+    if growth_rate == 0:
+        return n_blocks * [0]
+    in_dims = [0, input_dim]
+    cur_dim, dim_sum = input_dim, input_dim
+    for i in range(n_blocks - 2):
+        dim_sum += cur_dim
+        in_dims.append(dim_sum)
+        cur_dim += growth_rate
+    return in_dims[:n_blocks]
+
 
 class Flow(nn.Module):
     """ A sequential container for flows.
@@ -72,14 +90,17 @@ class Flow(nn.Module):
         self.n_blocks = n_blocks
         self.n_hidden = n_hidden
         self.cond_nn_factory=cond_nn_factory
+        self.noise_growth_rate = noise_growth_rate
         self.flow_blocks = nn.ModuleList()
         self.flow_blocks.append(argmax.ArgmaxLayer(self.n_classes))
         input_dim = self.n_classes
-        self.flow_blocks.append(FlowBlock(input_dim, self.n_hidden, self.cond_nn_factory, 0))
-        for _ in range(self.n_blocks - 1):
+        noise_cond_nn_in_dim = _get_noise_condn_nn_in_dims(n_blocks, n_classes, noise_growth_rate)
+        for i in range(self.n_blocks):
+            self.flow_blocks.append(
+                FlowBlock(input_dim, self.n_hidden, self.cond_nn_factory, noise_cond_nn_in_dim[i], noise_growth_rate)
+            )
             if noise_growth_rate:
                 input_dim += noise_growth_rate
-            self.flow_blocks.append(FlowBlock(input_dim, self.n_hidden, self.cond_nn_factory, noise_growth_rate))
 
     def forward(self, inputs, cond_inputs=None):
         """ Performs a forward or backward pass for flow modules.
@@ -88,8 +109,12 @@ class Flow(nn.Module):
             mode: to run direct computation or inverse
         """
         logdets = torch.zeros(inputs.size(0), 1, device=inputs.device)
-        for module in self.flow_blocks:
-            inputs, logdet = module(inputs, cond_inputs)
+        inputs, logdet = self.flow_blocks[0](inputs)
+        logdets += logdet
+        prev_inputs = []
+        for module in self.flow_blocks[1:]:
+            prev_inputs.append(inputs)
+            inputs, logdet = module(inputs, cond_inputs, prev_inputs[:-1])
             logdets += logdet
         return inputs, logdets
 
@@ -111,8 +136,12 @@ class Flow(nn.Module):
         log_probs = (-0.5 * u.pow(2) - 0.5 * math.log(2 * math.pi)).sum(-1, keepdim=True)
         return (log_probs + log_jacob).sum(-1, keepdim=True)
 
-    def sample_with_log_prob(self, sample_shape=None, mean=None, log_var=None, cond_inputs=None):
-        noise_dist = torch.distributions.normal.Normal(torch.zeros(sample_shape), torch.ones(sample_shape))
+    def sample_with_log_prob(self, n_samples, mean=None, log_var=None, cond_inputs=None):
+        input_dim = self.n_classes + self.noise_growth_rate * (self.n_blocks - 1)
+        noise_dist = torch.distributions.normal.Normal(
+            torch.zeros(n_samples, input_dim).cuda(),
+            torch.ones(n_samples, input_dim).cuda()
+        )
         noise = noise_dist.sample()
         log_prob = noise_dist.log_prob(noise).sum(dim=1, keepdim=True)
         device = next(self.parameters()).device

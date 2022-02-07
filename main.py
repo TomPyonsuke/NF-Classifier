@@ -5,6 +5,8 @@ def main(args):
     if args.task == 'cifar10':
         train_cifar10(
             n_epochs=args.num_epochs,
+            train_batch_size=args.train_batch_size,
+            val_batch_size=args.val_batch_size,
             n_blocks=args.num_blocks,
             learning_rate=args.learning_rate,
             weight_decay=args.weight_decay,
@@ -25,6 +27,14 @@ if __name__ == '__main__':
                         type=int,
                         default=100,
                         help='Number of epochs to train.')
+    parser.add_argument('--train_batch_size',
+                        type=int,
+                        default=64,
+                        help='Train batch size.')
+    parser.add_argument('--val_batch_size',
+                        type=int,
+                        default=128,
+                        help='Evaluation batch size.')
     parser.add_argument('--learning_rate',
                         type=float,
                         default=1e-3,
